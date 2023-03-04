@@ -1,0 +1,169 @@
+#include <stdio.h>
+#include <stdlib.h> 
+#include <math.h> 
+#include <sys/time.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <string.h>
+#include <pthread.h>
+#include <assert.h>
+#include <errno.h>
+
+#define scorebase 15000
+
+int threadsC=0;
+int sigleCoreScore=0;
+int multiCoreScore=0;
+int sigleThreadScore=0;
+int multiThreadScore=0;
+int finalscore=0;
+
+double get_wtime(void){									
+	struct timeval t;
+    gettimeofday(&t, NULL);
+    return (double)t.tv_sec + (double)t.tv_usec*1.0e-6;
+}
+
+double intergral(double x){ 				
+       return log(x)*sqrt(x);
+}
+
+void *thread_function(int *z){							//void isws
+	
+    double a=1,b=4;										//olokliroma apo to 1...10
+    unsigned long const n = 1e9;				
+    const double dx=(b-a)/n;							//dx
+    double S=0;											//arxiko emvado apo olokliroma S=0
+
+    for(unsigned long i=*z; i<n; i+=threadsC){ 			//(int *)
+         double xi=a+(i + 0.5)*dx;						//spaw to olokliroma sta threads, sa na einai workers ta threads
+            S+=intergral(xi);							//athroizw ton upologismo kathe worker gia to sunoliko emvado
+    }
+            S*=dx;										//telikos olokliroma: S epi dx
+            return NULL;
+}
+
+void process_calc(int k,int processNumber){ 			//spaw to olokliroma se diergasies gia pio grigoro upologismo
+    double a=1,b=4;
+    unsigned long const n = 1e9;
+    const double dx=(b-a)/n;
+    double S=0;
+
+    for(unsigned long i=k; i<n; i+=processNumber) { 
+         double xi=a+(i+0.5)*dx;
+            S+=intergral(xi);
+    }
+            S*=dx;
+}
+
+
+int main(int argc, char *argv[]){
+	
+	system("clear");
+	
+	printf("Benchmarks system: \nCore Characteristics: \n");
+	
+	int NumOfCores=get_nprocs_conf();
+	int NumOfThreads=NumOfCores*2;
+	
+	FILE *fp = fopen("/proc/cpuinfo", "r");				//fernei plirofori tou kathe core
+    assert(fp!=NULL);
+    size_t n=0;
+    char *line = NULL;
+    while (getline(&line, &n, fp)>0) {
+		if (strstr(line, "model name")) {
+			printf("%s", line);
+        }
+    }
+	free(line);
+        
+	//system("lscpu | sed -nr '/Model name/ s/.*:\s*(.*) @ .*/\1/p'");
+	
+	printf("\nYour system has %d cores and %d threads, wait for you benchmarks:\n", NumOfCores, NumOfThreads);
+	
+	pthread_t threads[NumOfThreads];
+    pid_t pid;
+	
+	int thread_args[NumOfThreads];
+    for(int i=0; i<NumOfThreads; i++){
+        thread_args[i]=i+1;
+    }
+   
+    double t0,t1,result;
+    double times[10];    
+    fflush(stdout);
+	
+	double tstart, tend;
+	tstart=get_wtime();
+	
+	//sigle core 
+	t0=get_wtime();
+    process_calc(0, 1);	
+    t1=get_wtime();
+
+    times[0]=t1-t0;
+    sigleCoreScore=scorebase/times[0];
+	
+	//multi core: dimiourgw mia process gia kathe core kai ypologizoyn to olokliroma
+	t0=get_wtime();
+    for(int ifork=0; ifork<NumOfCores; ifork++){ 
+		
+		pid=fork();
+        if(pid==0){
+            process_calc(ifork,NumOfCores);
+            exit(0); 
+        }
+    }
+    waitpid(-1, NULL, 0); 
+    t1=get_wtime();
+    
+    times[1]=t1-t0;
+    multiCoreScore=scorebase/times[1];
+	
+	//sigle thread
+	threadsC=1;
+    t0=get_wtime();
+    if(pthread_create(&threads[0], NULL, thread_function, &thread_args[0])!=0){
+            fprintf(stderr, "Failed to create thread\n");
+            exit(EXIT_FAILURE);
+    }
+    if (pthread_join(threads[0], (void **)&result)!=0){
+            fprintf(stderr, "Failed to join thread\n");
+            exit(EXIT_FAILURE);
+    }
+	
+    t1=get_wtime();
+    times[2]=t1-t0;
+    sigleThreadScore=scorebase/times[2];
+	
+	//multi thread
+    threadsC=NumOfCores*2;
+    t0=get_wtime();
+    for(int i=0; i<threadsC; i++){
+    if (pthread_create(&threads[i], NULL, thread_function, &thread_args[0])!=0) {
+            fprintf(stderr, "Failed to create thread\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    for(int i=0; i<threadsC; i++){
+        if (pthread_join(threads[i], (void **)&result)!=0) {
+            fprintf(stderr, "Failed to join thread\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    t1=get_wtime();
+    times[3]=t1-t0;
+    multiThreadScore=scorebase/times[3];
+	tend=get_wtime();
+	//telika
+	finalscore=(sigleCoreScore+multiCoreScore+sigleThreadScore+multiThreadScore)/3;
+	printf("\nSingle core score: %d\nMulti core score: %d \nSingle thread score: %d \nMulti thread score: %d", sigleCoreScore, multiCoreScore, sigleThreadScore, multiThreadScore);
+    printf("\nFinal score: %d", finalscore);
+	printf("\nTime taken for measures: %.5f\n\n", tend-tstart);
+	fflush(stdout);
+    sleep(2);
+    
+	fclose(fp);
+	return 0;
+	
+}
